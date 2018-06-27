@@ -82,11 +82,8 @@ typedef enum {
     SHA_OPENSSL = 0,
     SHA_NONE,
     SHA_SSE,
-    SHA_SSE_NI,
     SHA_AVX1,
     SHA_AVX2,
-    SHA_AVX512,
-    SHA_AVX512_NI,
     SHA_METHOD_NUM
 }method_t;
 
@@ -100,16 +97,8 @@ struct sha256_method_def method_def[SHA_METHOD_NUM] = {
     { NULL, NULL, NULL },
     { sha256_ctx_mgr_init,              sha256_ctx_mgr_submit,              sha256_ctx_mgr_flush            },
     { sha256_ctx_mgr_init_sse,          sha256_ctx_mgr_submit_sse,          sha256_ctx_mgr_flush_sse        },
-
-    { NULL, NULL, NULL },
-//  { sha256_ctx_mgr_init_sse_ni,       sha256_ctx_mgr_submit_sse_ni,       sha256_ctx_mgr_flush_sse_ni     },
     { sha256_ctx_mgr_init_avx,          sha256_ctx_mgr_submit_avx,          sha256_ctx_mgr_flush_avx        },
     { sha256_ctx_mgr_init_avx2,         sha256_ctx_mgr_submit_avx2,         sha256_ctx_mgr_flush_avx2       },
-
-    { NULL, NULL, NULL },
-//  { sha256_ctx_mgr_init_avx512,       sha256_ctx_mgr_submit_avx512,       sha256_ctx_mgr_flush_avx512     },
-    { NULL, NULL, NULL },
-//  { sha256_ctx_mgr_init_avx512_ni,    sha256_ctx_mgr_submit_avx512_ni,    sha256_ctx_mgr_flush_avx512_ni  },
 };
 
 void sha256_ssl(int64_t index, const uint8_t* buf, int size)
@@ -119,19 +108,21 @@ void sha256_ssl(int64_t index, const uint8_t* buf, int size)
     SHA256_Update(&o_ctx, buf, size);
     SHA256_Final(digest_ref_upd, &o_ctx);
     
-    if(index < 3)
+    if(index == 3)
         printhex8(digest_ref_upd, SHA256_DIGEST_NWORDS);
 }
 
+static     SHA256_HASH_CTX_MGR *mgr = NULL;
+
 void sha256_isa(int64_t index, method_t method, const uint8_t* buf, int size)
 {
-    SHA256_HASH_CTX_MGR *mgr = NULL;
     SHA256_HASH_CTX ctxpool[1], *ctx = NULL;
 
     struct user_data udata[1];
-
-    posix_memalign((void *)&mgr, 16, sizeof(SHA256_HASH_CTX_MGR));
-    method_def[method].func_init(mgr);
+    if (mgr == NULL) {
+        posix_memalign((void *)&mgr, 16, sizeof(SHA256_HASH_CTX_MGR));
+        method_def[method].func_init(mgr);
+    }
 
     // Init ctx contents
     hash_ctx_init(&ctxpool[0]);
@@ -174,7 +165,7 @@ void sha256_isa(int64_t index, method_t method, const uint8_t* buf, int size)
             }
         }
     }
-    if (index < 3)
+    if (index == 3)
         printhex32(ctxpool[0].job.result_digest, SHA256_DIGEST_NWORDS);
 }
 
@@ -188,6 +179,7 @@ void test_perf(method_t method, int64_t count, const uint8_t* buf, int size)
         case SHA_OPENSSL:
             sha256_ssl(i, buf, size);
             break;
+        case SHA_NONE:
         case SHA_AVX1:
         case SHA_AVX2:
         case SHA_SSE:
@@ -201,6 +193,18 @@ void test_perf(method_t method, int64_t count, const uint8_t* buf, int size)
     printf("   Time: %lf sec, hashrate: %lf\n", sec, rate);
 
 }
+
+int test(unsigned char *bufs)
+{
+    int count = 50000;
+//     printf("openssl\n");   test_perf(SHA_OPENSSL, count, bufs, TEST_LEN);
+    printf("default\n");   test_perf(SHA_NONE, count, bufs, TEST_LEN);
+    printf("sse    \n");   test_perf(SHA_SSE, count, bufs, TEST_LEN);
+    printf("avx1   \n");   test_perf(SHA_AVX1, count, bufs, TEST_LEN);
+    printf("avx2   \n");   test_perf(SHA_AVX2, count, bufs, TEST_LEN);
+    return 0;
+}
+
 int main(void)
 {
 	SHA256_CTX o_ctx;	//openSSL
@@ -210,9 +214,8 @@ int main(void)
 	unsigned char *bufs[TEST_BUFS];
 	struct user_data udata[TEST_BUFS];
 
-// 	posix_memalign((void *)&mgr, 16, sizeof(SHA256_HASH_CTX_MGR));
-// 	sha256_ctx_mgr_init(mgr);
-
+	posix_memalign((void *)&mgr, 16, sizeof(SHA256_HASH_CTX_MGR));
+	sha256_ctx_mgr_init(mgr);
 
 	// Init ctx contents
 	for (i = 0; i < TEST_BUFS; i++) {
@@ -221,41 +224,25 @@ int main(void)
 			printf("malloc failed test aborted\n");
 			return 1;
         }
-        else {
-//             memcpy(bufs[i], "abc", TEST_LEN);
-        }
-// 		hash_ctx_init(&ctxpool[i]);
-// 		ctxpool[i].user_data = (void *)&udata[i];
+		hash_ctx_init(&ctxpool[i]);
+		ctxpool[i].user_data = (void *)&udata[i];
 	}
-    int count = 5;
 
-    printf("openssl\n");
-    test_perf(SHA_OPENSSL, count, bufs[0], TEST_LEN);
-
-    printf("sse\n");
-    test_perf(SHA_SSE, count, bufs[0], TEST_LEN);
-
-    printf("avx1\n");
-    test_perf(SHA_AVX1, count, bufs[0], TEST_LEN);
-
-    printf("avx2\n");
-    test_perf(SHA_AVX2, count, bufs[0], TEST_LEN);
-
-    return 0;
+    return test(bufs[0]);
 
 	//Openssl SHA256 update test
-// 	SHA256_Init(&o_ctx);
-// 	for (k = 0; k < ROTATION_TIMES; k++) {
-// 		SHA256_Update(&o_ctx, bufs[k % TEST_BUFS], TEST_LEN);
-// 	}
-// 	SHA256_Final(digest_ref_upd, &o_ctx);
+	SHA256_Init(&o_ctx);
+	for (k = 0; k < ROTATION_TIMES; k++) {
+		SHA256_Update(&o_ctx, bufs[k % TEST_BUFS], TEST_LEN);
+	}
+	SHA256_Final(digest_ref_upd, &o_ctx);
 
 	// Initialize pool
-// 	for (i = 0; i < TEST_BUFS; i++) {
-// 		struct user_data *u = (struct user_data *)ctxpool[i].user_data;
-// 		u->idx = i;
-// 		u->processed = 0;
-// 	}
+	for (i = 0; i < TEST_BUFS; i++) {
+		struct user_data *u = (struct user_data *)ctxpool[i].user_data;
+		u->idx = i;
+		u->processed = 0;
+	}
 
 	printf("Starting updates\n");
 	int highest_pool_idx = 0;
